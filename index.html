@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>A century of mountain temperatures | Steamboat Springs</title>
+<meta name="description" content="One hundred years of NOAA daily temperature records for Steamboat Springs, Colorado." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #f5f1e8; }
+  * { box-sizing: border-box; }
+</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-type="module" data-presets="react">
+const { useEffect, useMemo, useRef, useState } = React;
+
+/**
+ * SteamboatTemperatureCentury.jsx
+ *
+ * Self-contained React component. No charting library required.
+ * Data source: NOAA NCEI Daily Summaries, station USC00057936.
+ *
+ * Drop into a React/Vite/Next project and render:
+ *   <SteamboatTemperatureCentury />
+ */
+
+const STATION = "USC00057936";
+const START_YEAR = 1926;
+const END_YEAR = 2025;
+
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+];
+
+const SEASONS = {
+  Annual: [1,2,3,4,5,6,7,8,9,10,11,12],
+  Winter: [12,1,2],
+  Spring: [3,4,5],
+  Summer: [6,7,8],
+  Fall: [9,10,11],
+};
+
+const METRICS = {
+  mean: { label: "Mean temperature", short: "Mean", key: "mean" },
+  high: { label: "Average daily high", short: "High", key: "high" },
+  low:  { label: "Average daily low", short: "Low", key: "low" },
+};
+
+const styles = {
+  page: {
+    minHeight: "100vh",
+    background: "#f5f1e8",
+    color: "#171717",
+    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    padding: "32px",
+  },
+  shell: { maxWidth: 1180, margin: "0 auto" },
+  eyebrow: {
+    fontSize: 12, letterSpacing: "0.12em", textTransform: "uppercase",
+    fontWeight: 700, color: "#6d655a", marginBottom: 8
+  },
+  title: {
+    fontFamily: 'Georgia, "Times New Roman", serif',
+    fontSize: "clamp(38px, 6vw, 72px)", lineHeight: 0.98,
+    letterSpacing: "-0.045em", margin: 0, maxWidth: 880
+  },
+  dek: { fontSize: 17, lineHeight: 1.55, color: "#514b43", maxWidth: 760, marginTop: 18 },
+  grid: {
+    display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 12, margin: "28px 0 18px"
+  },
+  card: {
+    background: "rgba(255,255,255,.65)", border: "1px solid #d8d0c2",
+    borderRadius: 14, padding: "14px 16px"
+  },
+  label: { fontSize: 11, color: "#70685e", textTransform: "uppercase", letterSpacing: ".08em", fontWeight: 700 },
+  value: { fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 31, marginTop: 4 },
+  controls: {
+    display: "flex", flexWrap: "wrap", gap: 12, alignItems: "end",
+    padding: 16, background: "#171717", color: "#fff", borderRadius: 15,
+    marginBottom: 16
+  },
+  control: { display: "grid", gap: 6, minWidth: 150 },
+  controlLabel: { fontSize: 10, textTransform: "uppercase", letterSpacing: ".1em", color: "#bdb7ae", fontWeight: 700 },
+  select: {
+    appearance: "none", border: "1px solid #4a4a4a", background: "#252525",
+    color: "#fff", borderRadius: 9, padding: "10px 34px 10px 11px", fontSize: 14
+  },
+  chartCard: {
+    background: "#fffdfa", border: "1px solid #d8d0c2",
+    borderRadius: 16, padding: "16px", boxShadow: "0 18px 50px rgba(49,39,25,.07)"
+  },
+  foot: { fontSize: 12, color: "#6d655a", lineHeight: 1.55, marginTop: 12 },
+  button: {
+    border: "1px solid #4a4a4a", background: "#252525", color: "#fff",
+    borderRadius: 9, padding: "10px 12px", cursor: "pointer"
+  }
+};
+
+/**
+ * Strict numeric parse for CSV cells.
+ * Number("") and Number(" ") both return 0, which would silently record a
+ * missing NOAA observation as a 0-degree reading. Anything blank or
+ * non-numeric returns NaN so it is excluded by the Number.isFinite guards.
+ */
+function num(v) {
+  if (v === null || v === undefined) return NaN;
+  const s = String(v).trim();
+  if (s === "") return NaN;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function mean(values) {
+  const good = values.filter(Number.isFinite);
+  return good.length ? good.reduce((a,b) => a+b, 0) / good.length : null;
+}
+
+function regression(points) {
+  const good = points.filter(d => Number.isFinite(d.value));
+  if (good.length < 2) return { slope: 0, intercept: 0 };
+  const x0 = good[0].year;
+  const xs = good.map(d => d.year - x0);
+  const ys = good.map(d => d.value);
+  const xBar = mean(xs), yBar = mean(ys);
+  const num = xs.reduce((s,x,i) => s + (x-xBar)*(ys[i]-yBar), 0);
+  const den = xs.reduce((s,x) => s + (x-xBar)**2, 0);
+  const slope = den ? num / den : 0;
+  return { slope, intercept: yBar - slope*xBar, x0 };
+}
+
+function movingAverage(points, windowSize) {
+  if (windowSize <= 1) return points.map(d => ({...d, smooth: d.value}));
+  const half = Math.floor(windowSize / 2);
+  return points.map((d, i) => {
+    const slice = points.slice(Math.max(0, i-half), Math.min(points.length, i+half+1));
+    return { ...d, smooth: mean(slice.map(x => x.value)) };
+  });
+}
+
+function seasonYear(date, season) {
+  const y = date.getUTCFullYear();
+  const m = date.getUTCMonth() + 1;
+  // Attribute December to the following winter so DJF stays together.
+  return season === "Winter" && m === 12 ? y + 1 : y;
+}
+
+function csvToRows(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map(x => x.replace(/^"|"$/g, ""));
+  return lines.slice(1).map(line => {
+    const cells = [];
+    let cur = "", quoted = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') quoted = !quoted;
+      else if (c === "," && !quoted) { cells.push(cur); cur = ""; }
+      else cur += c;
+    }
+    cells.push(cur);
+    return Object.fromEntries(headers.map((h,i) => [h, cells[i] ?? ""]));
+  });
+}
+
+async function fetchChunk(startYear, endYear) {
+  const params = new URLSearchParams({
+    dataset: "daily-summaries",
+    stations: STATION,
+    startDate: `${startYear}-01-01`,
+    endDate: `${endYear}-12-31`,
+    format: "csv",
+    units: "standard",
+    includeAttributes: "false",
+    includeStationName: "true",
+  });
+  const url = `https://www.ncei.noaa.gov/access/services/data/v1?${params}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`NOAA request failed (${res.status})`);
+  return csvToRows(await res.text());
+}
+
+async function fetchCentury() {
+  const chunks = [];
+  for (let y = START_YEAR; y <= END_YEAR; y += 10) {
+    chunks.push(fetchChunk(y, Math.min(y + 9, END_YEAR)));
+  }
+  const parts = await Promise.all(chunks);
+  return parts.flat();
+}
+
+function formatTemp(v, unit) {
+  if (!Number.isFinite(v)) return "—";
+  if (unit === "C") return `${((v - 32) * 5/9).toFixed(1)}°C`;
+  return `${v.toFixed(1)}°F`;
+}
+
+function convert(v, unit) {
+  if (!Number.isFinite(v)) return null;
+  return unit === "C" ? (v - 32) * 5/9 : v;
+}
+
+function SteamboatTemperatureCentury() {
+  const [raw, setRaw] = useState([]);
+  const [status, setStatus] = useState("loading");
+  const [error, setError] = useState("");
+  const [metric, setMetric] = useState("mean");
+  const [season, setSeason] = useState("Annual");
+  const [unit, setUnit] = useState("F");
+  const [smooth, setSmooth] = useState(10);
+  const [fromYear, setFromYear] = useState(START_YEAR);
+  const [toYear, setToYear] = useState(END_YEAR);
+  const [hover, setHover] = useState(null);
+  const svgRef = useRef(null);
+
+  useEffect(() => {
+    let live = true;
+    setStatus("loading");
+    fetchCentury()
+      .then(rows => {
+        if (!live) return;
+        setRaw(rows);
+        setStatus("ready");
+      })
+      .catch(err => {
+        if (!live) return;
+        setError(err.message || "Unable to load NOAA data.");
+        setStatus("error");
+      });
+    return () => { live = false; };
+  }, []);
+
+  const annual = useMemo(() => {
+    const buckets = new Map();
+    const allowed = new Set(SEASONS[season]);
+
+    for (const row of raw) {
+      if (!row.DATE) continue;
+      const date = new Date(`${row.DATE}T00:00:00Z`);
+      const month = date.getUTCMonth() + 1;
+      if (!allowed.has(month)) continue;
+
+      const year = seasonYear(date, season);
+      if (year < START_YEAR || year > END_YEAR) continue;
+
+      const tmax = num(row.TMAX);
+      const tmin = num(row.TMIN);
+      const dailyMean = Number.isFinite(tmax) && Number.isFinite(tmin) ? (tmax + tmin) / 2 : null;
+
+      if (!buckets.has(year)) buckets.set(year, { highs: [], lows: [], means: [], days: 0 });
+      const b = buckets.get(year);
+      if (Number.isFinite(tmax)) b.highs.push(tmax);
+      if (Number.isFinite(tmin)) b.lows.push(tmin);
+      if (Number.isFinite(dailyMean)) b.means.push(dailyMean);
+      b.days += 1;
+    }
+
+    return Array.from({length: END_YEAR - START_YEAR + 1}, (_,i) => {
+      const year = START_YEAR + i;
+      const b = buckets.get(year);
+      return {
+        year,
+        high: b ? mean(b.highs) : null,
+        low: b ? mean(b.lows) : null,
+        mean: b ? mean(b.means) : null,
+        days: b?.days || 0,
+      };
+    });
+  }, [raw, season]);
+
+  const series = useMemo(() => {
+    const base = annual
+      .filter(d => d.year >= fromYear && d.year <= toYear)
+      .map(d => ({ year: d.year, value: convert(d[metric], unit), days: d.days }));
+    return movingAverage(base, smooth);
+  }, [annual, metric, unit, smooth, fromYear, toYear]);
+
+  const stats = useMemo(() => {
+    const valid = series.filter(d => Number.isFinite(d.value));
+    if (!valid.length) return {};
+    const reg = regression(valid);
+    const warmest = valid.reduce((a,b) => b.value > a.value ? b : a);
+    const coldest = valid.reduce((a,b) => b.value < a.value ? b : a);
+    const firstDecade = valid.filter(d => d.year < valid[0].year + 10);
+    const lastDecade = valid.filter(d => d.year > valid[valid.length-1].year - 10);
+    return {
+      average: mean(valid.map(d => d.value)),
+      warmest,
+      coldest,
+      changePerCentury: reg.slope * 100,
+      decadeShift: mean(lastDecade.map(d => d.value)) - mean(firstDecade.map(d => d.value)),
+      reg,
+    };
+  }, [series]);
+
+  const chart = useMemo(() => {
+    const W = 1120, H = 500;
+    const m = { top: 34, right: 26, bottom: 54, left: 68 };
+    const valid = series.filter(d => Number.isFinite(d.value));
+    if (!valid.length) return { W,H,m,valid:[], yTicks:[] };
+
+    let yMin = Math.floor(Math.min(...valid.map(d => d.value)) / 5) * 5 - 2;
+    let yMax = Math.ceil(Math.max(...valid.map(d => d.value)) / 5) * 5 + 2;
+    if (yMax - yMin < 10) { yMin -= 5; yMax += 5; }
+
+    const x = year => m.left + ((year - fromYear) / Math.max(1, toYear-fromYear)) * (W-m.left-m.right);
+    const y = value => m.top + ((yMax-value)/(yMax-yMin))*(H-m.top-m.bottom);
+    const path = valid.map((d,i) => `${i ? "L" : "M"} ${x(d.year).toFixed(2)} ${y(d.value).toFixed(2)}`).join(" ");
+    const smoothPath = valid.filter(d => Number.isFinite(d.smooth))
+      .map((d,i) => `${i ? "L" : "M"} ${x(d.year).toFixed(2)} ${y(d.smooth).toFixed(2)}`).join(" ");
+
+    const reg = stats.reg || {slope:0, intercept:0, x0:fromYear};
+    const regValue = yr => reg.intercept + reg.slope*(yr-reg.x0);
+    const trendPath = `M ${x(fromYear)} ${y(regValue(fromYear))} L ${x(toYear)} ${y(regValue(toYear))}`;
+    const yTicks = Array.from({length: 6}, (_,i) => yMin + i*(yMax-yMin)/5);
+    const xStep = toYear-fromYear > 70 ? 20 : toYear-fromYear > 35 ? 10 : 5;
+    const xTicks = [];
+    for (let yr = Math.ceil(fromYear/xStep)*xStep; yr <= toYear; yr += xStep) xTicks.push(yr);
+
+    return { W,H,m,valid,yMin,yMax,x,y,path,smoothPath,trendPath,yTicks,xTicks };
+  }, [series, fromYear, toYear, stats]);
+
+  function onPointerMove(e) {
+    if (!chart.valid.length || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * chart.W;
+    const year = Math.round(fromYear + ((px-chart.m.left)/(chart.W-chart.m.left-chart.m.right))*(toYear-fromYear));
+    const nearest = chart.valid.reduce((a,b) => Math.abs(b.year-year) < Math.abs(a.year-year) ? b : a);
+    setHover(nearest);
+  }
+
+  const rangeWarning = fromYear >= toYear;
+
+  return (
+    <main style={styles.page}>
+      <div style={styles.shell}>
+        <div style={styles.eyebrow}>Steamboat Springs, Colorado · NOAA station USC00057936</div>
+        <h1 style={styles.title}>A century of mountain temperatures</h1>
+        <p style={styles.dek}>
+          Explore 100 complete calendar years, 1926–2025. Switch between annual and seasonal
+          views, compare daily highs and lows, smooth the noise, and inspect the long-run trend.
+        </p>
+
+        <section style={styles.grid}>
+          <div style={styles.card}>
+            <div style={styles.label}>Period average</div>
+            <div style={styles.value}>{formatTemp(stats.average, unit)}</div>
+          </div>
+          <div style={styles.card}>
+            <div style={styles.label}>Linear change / century</div>
+            <div style={styles.value}>
+              {Number.isFinite(stats.changePerCentury) ? `${stats.changePerCentury >= 0 ? "+" : ""}${stats.changePerCentury.toFixed(1)}°${unit}` : "—"}
+            </div>
+          </div>
+          <div style={styles.card}>
+            <div style={styles.label}>Warmest year</div>
+            <div style={styles.value}>
+              {stats.warmest ? `${stats.warmest.year} · ${formatTemp(stats.warmest.value, unit)}` : "—"}
+            </div>
+          </div>
+          <div style={styles.card}>
+            <div style={styles.label}>Coldest year</div>
+            <div style={styles.value}>
+              {stats.coldest ? `${stats.coldest.year} · ${formatTemp(stats.coldest.value, unit)}` : "—"}
+            </div>
+          </div>
+        </section>
+
+        <section style={styles.controls}>
+          <label style={styles.control}>
+            <span style={styles.controlLabel}>Measure</span>
+            <select style={styles.select} value={metric} onChange={e => setMetric(e.target.value)}>
+              {Object.entries(METRICS).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+          </label>
+
+          <label style={styles.control}>
+            <span style={styles.controlLabel}>Season</span>
+            <select style={styles.select} value={season} onChange={e => setSeason(e.target.value)}>
+              {Object.keys(SEASONS).map(s => <option key={s}>{s}</option>)}
+            </select>
+          </label>
+
+          <label style={{...styles.control, minWidth: 120}}>
+            <span style={styles.controlLabel}>Units</span>
+            <select style={styles.select} value={unit} onChange={e => setUnit(e.target.value)}>
+              <option value="F">Fahrenheit</option>
+              <option value="C">Celsius</option>
+            </select>
+          </label>
+
+          <label style={{...styles.control, minWidth: 135}}>
+            <span style={styles.controlLabel}>Smoothing</span>
+            <select style={styles.select} value={smooth} onChange={e => setSmooth(Number(e.target.value))}>
+              <option value={1}>None</option>
+              <option value={5}>5 years</option>
+              <option value={10}>10 years</option>
+              <option value={20}>20 years</option>
+            </select>
+          </label>
+
+          <label style={styles.control}>
+            <span style={styles.controlLabel}>From year: {fromYear}</span>
+            <input type="range" min={START_YEAR} max={END_YEAR-1} value={fromYear}
+              onChange={e => setFromYear(Math.min(Number(e.target.value), toYear-1))} />
+          </label>
+
+          <label style={styles.control}>
+            <span style={styles.controlLabel}>To year: {toYear}</span>
+            <input type="range" min={START_YEAR+1} max={END_YEAR} value={toYear}
+              onChange={e => setToYear(Math.max(Number(e.target.value), fromYear+1))} />
+          </label>
+
+          <button style={styles.button} onClick={() => {setFromYear(START_YEAR); setToYear(END_YEAR);}}>
+            Reset range
+          </button>
+        </section>
+
+        <section style={styles.chartCard}>
+          {status === "loading" && (
+            <div style={{padding: "110px 20px", textAlign: "center", color: "#6d655a"}}>
+              Loading and aggregating roughly 36,500 NOAA observations…
+            </div>
+          )}
+
+          {status === "error" && (
+            <div style={{padding: 28}}>
+              <strong>NOAA data could not be loaded.</strong>
+              <p style={{color:"#6d655a"}}>{error}</p>
+              <p style={{color:"#6d655a"}}>
+                This usually means the host environment blocks cross-origin requests. Run the component
+                in a normal browser dev server, or proxy the NOAA endpoint through your app.
+              </p>
+            </div>
+          )}
+
+          {status === "ready" && !rangeWarning && chart.valid.length > 0 && (
+            <>
+              <div style={{display:"flex", justifyContent:"space-between", gap:16, flexWrap:"wrap", margin:"2px 6px 8px"}}>
+                <div>
+                  <strong>{season} · {METRICS[metric].label}</strong>
+                  <div style={{fontSize:12, color:"#70685e"}}>{fromYear}–{toYear}</div>
+                </div>
+                <div style={{display:"flex", gap:16, fontSize:12, color:"#59534b"}}>
+                  <span>Thin line: annual value</span>
+                  <span>Heavy line: {smooth === 1 ? "annual value" : `${smooth}-year average`}</span>
+                  <span>Dotted: linear trend</span>
+                </div>
+              </div>
+
+              <svg
+                ref={svgRef}
+                viewBox={`0 0 ${chart.W} ${chart.H}`}
+                style={{width:"100%", height:"auto", display:"block", touchAction:"none"}}
+                onPointerMove={onPointerMove}
+                onPointerLeave={() => setHover(null)}
+                role="img"
+                aria-label={`Line chart of ${METRICS[metric].label.toLowerCase()} in Steamboat Springs from ${fromYear} to ${toYear}`}
+              >
+                <rect x="0" y="0" width={chart.W} height={chart.H} fill="#fffdfa" />
+
+                {chart.yTicks.map((t,i) => (
+                  <g key={i}>
+                    <line x1={chart.m.left} x2={chart.W-chart.m.right} y1={chart.y(t)} y2={chart.y(t)}
+                      stroke="#ded8ce" strokeWidth="1" />
+                    <text x={chart.m.left-12} y={chart.y(t)+4} textAnchor="end" fontSize="12" fill="#756e64">
+                      {t.toFixed(0)}°
+                    </text>
+                  </g>
+                ))}
+
+                {chart.xTicks.map(yr => (
+                  <g key={yr}>
+                    <line x1={chart.x(yr)} x2={chart.x(yr)} y1={chart.m.top} y2={chart.H-chart.m.bottom}
+                      stroke="#eee9e0" strokeWidth="1" />
+                    <text x={chart.x(yr)} y={chart.H-chart.m.bottom+25} textAnchor="middle" fontSize="12" fill="#756e64">
+                      {yr}
+                    </text>
+                  </g>
+                ))}
+
+                <path d={chart.path} fill="none" stroke="#b9b0a2" strokeWidth="1.2" />
+                <path d={chart.smoothPath} fill="none" stroke="#9b2c2c" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+                <path d={chart.trendPath} fill="none" stroke="#171717" strokeWidth="1.8" strokeDasharray="7 7" />
+
+                {hover && Number.isFinite(hover.value) && (
+                  <g pointerEvents="none">
+                    <line x1={chart.x(hover.year)} x2={chart.x(hover.year)} y1={chart.m.top} y2={chart.H-chart.m.bottom}
+                      stroke="#171717" strokeWidth="1" />
+                    <circle cx={chart.x(hover.year)} cy={chart.y(hover.value)} r="5" fill="#9b2c2c" stroke="#fff" strokeWidth="2" />
+                    <rect
+                      x={Math.min(chart.W-190, Math.max(8, chart.x(hover.year)-80))}
+                      y={Math.max(8, chart.y(hover.value)-76)}
+                      width="170" height="58" rx="8" fill="#171717"
+                    />
+                    <text
+                      x={Math.min(chart.W-180, Math.max(18, chart.x(hover.year)-70))}
+                      y={Math.max(28, chart.y(hover.value)-52)}
+                      fontSize="13" fill="#fff" fontWeight="700"
+                    >
+                      {hover.year}
+                    </text>
+                    <text
+                      x={Math.min(chart.W-180, Math.max(18, chart.x(hover.year)-70))}
+                      y={Math.max(46, chart.y(hover.value)-34)}
+                      fontSize="12" fill="#d8d0c2"
+                    >
+                      {formatTemp(hover.value, unit)} · {hover.days} observations
+                    </text>
+                  </g>
+                )}
+
+                <text x={chart.W/2} y={chart.H-8} textAnchor="middle" fontSize="11" fill="#756e64">
+                  Calendar year {season === "Winter" ? "(winter is Dec–Feb, labeled by Jan/Feb year)" : ""}
+                </text>
+                <text transform={`translate(16 ${chart.H/2}) rotate(-90)`} textAnchor="middle" fontSize="11" fill="#756e64">
+                  Temperature (°{unit})
+                </text>
+              </svg>
+            </>
+          )}
+        </section>
+
+        <p style={styles.foot}>
+          Source: NOAA National Centers for Environmental Information, Global Historical Climatology
+          Network Daily, Steamboat Springs station USC00057936 (40.4883° N, 106.8233° W; elevation
+          6,866 ft). Daily TMAX and TMIN are aggregated in the browser. Years with missing observations
+          remain in the timeline; hover counts show the number of records included. The dotted line is
+          an ordinary least-squares trend, not a forecast.
+        </p>
+      </div>
+    </main>
+  );
+}
+
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <SteamboatTemperatureCentury />
+);
+</script>
+</body>
+</html>
