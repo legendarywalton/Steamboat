@@ -1,26 +1,4 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>A century of mountain temperatures | Steamboat Springs</title>
-<meta name="description" content="One hundred years of NOAA daily temperature records for Steamboat Springs, Colorado." />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet" />
-<style>
-  html, body { margin: 0; padding: 0; background: #f5f1e8; }
-  * { box-sizing: border-box; }
-</style>
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
-</head>
-<body>
-<div id="root"></div>
-
-<script type="text/babel" data-type="module" data-presets="react">
-const { useEffect, useMemo, useRef, useState } = React;
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
  * SteamboatTemperatureCentury.jsx
@@ -423,7 +401,7 @@ function convert(v, unit) {
   return unit === "C" ? (v - 32) * 5/9 : v;
 }
 
-function SteamboatTemperatureCentury() {
+export default function SteamboatTemperatureCentury() {
   const [raw, setRaw] = useState([]);
   const [status, setStatus] = useState("loading");
   const [error, setError] = useState("");
@@ -989,11 +967,3 @@ function SteamboatTemperatureCentury() {
     </main>
   );
 }
-
-
-ReactDOM.createRoot(document.getElementById("root")).render(
-  <SteamboatTemperatureCentury />
-);
-</script>
-</body>
-</html>
