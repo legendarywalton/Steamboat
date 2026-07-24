@@ -189,13 +189,44 @@ async function fetchChunk(startYear, endYear) {
   return csvToRows(await res.text());
 }
 
-async function fetchCentury() {
+/**
+ * Local-first loading. Commit the NOAA export next to this page as
+ * steamboat-daily.csv and it is used directly; the live NOAA request is
+ * only attempted if the local file is missing, which is what happens on
+ * hosts that block the cross-origin call.
+ */
+const LOCAL_DATA_URL = "./steamboat-daily.csv";
+
+async function fetchLocal() {
+  const res = await fetch(LOCAL_DATA_URL);
+  if (!res.ok) throw new Error(`No local data file at ${LOCAL_DATA_URL} (${res.status}).`);
+  const rows = csvToRows(await res.text());
+  if (!rows.length) throw new Error(`Local data file at ${LOCAL_DATA_URL} is empty.`);
+  if (!("TMAX" in rows[0]) || !("TMIN" in rows[0]) || !("DATE" in rows[0])) {
+    throw new Error("Local data file is missing DATE, TMAX or TMIN columns.");
+  }
+  return rows;
+}
+
+async function fetchRemote() {
   const chunks = [];
   for (let y = START_YEAR; y <= END_YEAR; y += 10) {
     chunks.push(fetchChunk(y, Math.min(y + 9, END_YEAR)));
   }
   const parts = await Promise.all(chunks);
   return parts.flat();
+}
+
+async function fetchCentury() {
+  try {
+    return await fetchLocal();
+  } catch (localErr) {
+    try {
+      return await fetchRemote();
+    } catch (remoteErr) {
+      throw new Error(`${localErr.message} Live NOAA request also failed: ${remoteErr.message}`);
+    }
+  }
 }
 
 function formatTemp(v, unit) {
@@ -437,8 +468,9 @@ function SteamboatTemperatureCentury() {
               <strong>NOAA data could not be loaded.</strong>
               <p style={{color:"#6d655a"}}>{error}</p>
               <p style={{color:"#6d655a"}}>
-                This usually means the host environment blocks cross-origin requests. Run the component
-                in a normal browser dev server, or proxy the NOAA endpoint through your app.
+                Export the station record from NOAA and commit it beside this page as
+                <code>steamboat-daily.csv</code> (columns DATE, TMAX, TMIN). The live NOAA request is
+                only a fallback and is often blocked by cross-origin rules on static hosts.
               </p>
             </div>
           )}
